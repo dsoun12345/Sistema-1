@@ -9,6 +9,26 @@ BORDE = 6   # grosor de la zona sensible para redimensionar (en píxeles)
 
 def crear_barra(ventana, titulo="Sistema de Inventario"):
     ventana.overrideredirect(True)
+    # Mantener la ventana en la barra de tareas y que no desaparezca al perder foco
+    ventana.after(10, lambda: ventana.wm_attributes("-topmost", False))
+    try:
+        from ctypes import windll
+        ventana.update_idletasks()
+        GWL_EXSTYLE = -20
+        WS_EX_APPWINDOW = 0x00040000
+        WS_EX_TOOLWINDOW = 0x00000080
+        hwnd = windll.user32.GetParent(ventana.winfo_id())
+        estilo = windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        estilo = estilo & ~WS_EX_TOOLWINDOW
+        estilo = estilo | WS_EX_APPWINDOW
+        windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, estilo)
+        # Re-mostrar la ventana para aplicar el cambio
+        ventana.withdraw()
+        ventana.after(10, ventana.deiconify)
+    except Exception as e:
+        print("No se pudo ajustar la ventana:", e)
+
+    
     ventana.update_idletasks()
 
     estado = {"max": False, "geo": ""}
