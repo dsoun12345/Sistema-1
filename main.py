@@ -4,6 +4,7 @@ import estilos
 from componentes.menu_lateral import crear_menu
 from pantallas.dashboard import crear_dashboard
 from componentes.barra_titulo import crear_barra
+from pantallas.inventario import crear_inventario
 
 app = ttk.Window(themename=estilos.TEMA)
 app.title("Sistema de Inventario")
@@ -34,12 +35,14 @@ def _placeholder(padre, texto):
 
 # ── ROUTER: decide qué pantalla mostrar según el menú ──
 def mostrar_pantalla(nombre):
-    for w in contenido.winfo_children():   
+    for w in contenido.winfo_children():
         w.destroy()
     if nombre == "Dashboard":
         crear_dashboard(contenido)
+    elif nombre == "Inventario":
+        crear_inventario(contenido)
     else:
-        _placeholder(contenido, nombre)   
+        _placeholder(contenido, nombre)
 
 
 menu = crear_menu(app, mostrar_pantalla)

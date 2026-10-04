@@ -164,3 +164,38 @@ def crear_barra(ventana, titulo="Sistema de Inventario"):
     ventana.bind("<ButtonRelease-1>", _fin_resize, add="+")
 
     return barra
+
+
+def crear_barra_dialogo(ventana, titulo):
+    """Barra morada para ventanas emergentes: título, botón cerrar y arrastre."""
+    ventana.overrideredirect(True)
+    ventana.configure(highlightthickness=1,
+                      highlightbackground=estilos.COLOR_SIDEBAR)
+
+    barra = tk.Frame(ventana, bg=estilos.COLOR_SIDEBAR, height=40)
+
+    lbl = tk.Label(barra, text=titulo, bg=estilos.COLOR_SIDEBAR, fg="white",
+                   font=estilos.FUENTE_BOTON, padx=15, pady=6)
+    lbl.pack(side="left")
+
+    b = tk.Label(barra, text="✕", bg=estilos.COLOR_SIDEBAR, fg="white",
+                 font=("Segoe UI", 12), width=4, cursor="hand2")
+    b.pack(side="right", fill="y")
+    b.bind("<Button-1>", lambda e: ventana.destroy())
+    b.bind("<Enter>", lambda e: b.configure(bg=estilos.COLOR_PELIGRO))
+    b.bind("<Leave>", lambda e: b.configure(bg=estilos.COLOR_SIDEBAR))
+
+    arrastre = {"x": 0, "y": 0}
+
+    def iniciar(e):
+        arrastre["x"] = e.x_root - ventana.winfo_x()
+        arrastre["y"] = e.y_root - ventana.winfo_y()
+
+    def mover(e):
+        ventana.geometry(f"+{e.x_root - arrastre['x']}+{e.y_root - arrastre['y']}")
+
+    for w in (barra, lbl):
+        w.bind("<Button-1>", iniciar)
+        w.bind("<B1-Motion>", mover)
+
+    return barra

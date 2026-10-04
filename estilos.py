@@ -46,4 +46,22 @@ def aplicar_estilos(ventana):
     estilo.configure("Titulo.TLabel", font=FUENTE_TITULO, foreground=COLOR_TEXTO)
     estilo.configure("Subtitulo.TLabel", font=FUENTE_SUBTITULO, foreground=COLOR_TEXTO)
     estilo.configure("Grande.TButton", font=FUENTE_BOTON, padding=10)
+        # Estilo de las tablas (Treeview)
+    estilo.configure("Treeview",
+                     font=("Segoe UI", 10),
+                     rowheight=32,              # filas más altas, más legibles
+                     background="white",
+                     fieldbackground="white",
+                     borderwidth=0)
+    estilo.configure("Treeview.Heading",
+                     font=("Segoe UI", 10, "bold"),
+                     background=COLOR_SIDEBAR,   # encabezado morado
+                     foreground="white",
+                     relief="flat",
+                     padding=8)
+    estilo.map("Treeview.Heading",
+               background=[("active", COLOR_SIDEBAR_HOVER)])
+    estilo.map("Treeview",
+               background=[("selected", COLOR_SIDEBAR_ACTIVO)],
+               foreground=[("selected", "white")])
     return estilo
