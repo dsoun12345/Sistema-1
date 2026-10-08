@@ -14,6 +14,7 @@ idna==3.20
 multidict==6.9.0
 packaging==26.3
 pillow==12.3.0
+pillow_heif==1.8.0
 postgrest==2.31.0
 propcache==0.5.4
 pycparser==3.0
