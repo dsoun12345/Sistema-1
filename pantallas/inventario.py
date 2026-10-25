@@ -7,9 +7,13 @@ from ttkbootstrap.constants import *
 from tkinter import messagebox, filedialog
 from PIL import Image, ImageOps, ImageTk
 import estilos
+from config import soles, porcentaje, calcular_margen, PRECIOS_INCLUYEN_IGV
 from conexion import supabase
 from componentes.barra_titulo import crear_barra_dialogo
 from componentes.boton import Boton
+from pantallas.importar_excel import abrir_importador, exportar_productos
+from pantallas.categorias import (cargar_categorias, ruta_de, rutas_ordenadas,
+                                  con_descendientes, abrir_gestor_categorias)
 
 # Soporte para fotos HEIC/HEIF (iPhone). Si no está instalado, se ignora.
 try:
@@ -62,6 +66,22 @@ def numero(valor):
     return str(int(valor)) if valor.is_integer() else str(valor)
 
 
+def texto_margen(costo, venta):
+    """Ganancia explicada en palabras simples (panel de detalle y formulario)."""
+    m = calcular_margen(costo, venta)
+    if m["ganancia"] < 0:
+        return f"⚠ Pierdes {soles(-m['ganancia'])} por cada unidad que vendes"
+    lineas = [f"Ganas {soles(m['ganancia'])} por cada unidad"]
+    if PRECIOS_INCLUYEN_IGV:
+        lineas[0] += f" ({soles(m['ganancia_sin_igv'])} después de pagar el IGV)"
+    if m["sobre_costo"] is not None:
+        lineas.append(f"Le subes {porcentaje(m['sobre_costo'])} a lo que te costó")
+    if m["margen"] is not None:
+        lineas.append(f"De cada {soles(1)} que cobras, {soles(m['margen'] / 100)} "
+                      f"es ganancia (margen {porcentaje(m['margen'])})")
+    return "\n".join(lineas)
+
+
 def codigos_de(producto):
     return [c["codigo"] for c in producto.get("codigos_barras") or []]
 
@@ -102,18 +122,30 @@ def crear_inventario(padre):
 
     btn_agregar = Boton(top, "+  Agregar producto",
                         lambda: abrir_formulario(marco, recargar_actual))
-    btn_agregar.grid(row=0, column=1, sticky="e")
+    btn_agregar.grid(row=0, column=3, sticky="e")
+    btn_importar = Boton(top, "Importar Excel",
+                         lambda: abrir_importador(marco, recargar_actual, seleccionados()),
+                         estilo="secundario")
+    btn_importar.grid(row=0, column=2, sticky="e", padx=8)
+    btn_categorias = Boton(top, "Categorías",
+                           lambda: abrir_gestor_categorias(marco, recargar_actual),
+                           estilo="secundario")
+    btn_categorias.grid(row=0, column=1, sticky="e")
 
     # ── Buscador + acciones sobre la selección ──
     barra_acciones = tk.Frame(marco, bg=estilos.COLOR_FONDO)
     barra_acciones.grid(row=1, column=0, columnspan=2, sticky="ew", padx=20, pady=(0, 10))
     tk.Label(barra_acciones, text="Buscar:", font=estilos.FUENTE_NORMAL,
              bg=estilos.COLOR_FONDO, fg=estilos.COLOR_TEXTO).pack(side="left")
-    entrada_busqueda = ttk.Entry(barra_acciones, width=40)
+    entrada_busqueda = ttk.Entry(barra_acciones, width=28)
     entrada_busqueda.pack(side="left", padx=8)
-    tk.Label(barra_acciones, text="(ID, nombre o código de barras)",
-             font=estilos.FUENTE_CARD_TXT, bg=estilos.COLOR_FONDO,
-             fg="#8a8a9a").pack(side="left")
+    # filtro por categoría: incluye sus subcategorías
+    TODAS = "Todas las categorías"
+    filtro_categoria = ttk.Combobox(barra_acciones, state="readonly", width=26,
+                                    values=[TODAS])
+    filtro_categoria.set(TODAS)
+    filtro_categoria.pack(side="left")
+    rutas_filtro = {}   # texto del combobox -> id de categoría
 
     btn_eliminar = Boton(barra_acciones, "Eliminar", lambda: eliminar_seleccion(),
                          estilo="peligro")
@@ -121,6 +153,10 @@ def crear_inventario(padre):
     btn_editar = Boton(barra_acciones, "Editar", lambda: editar_seleccion(),
                        estilo="secundario")
     btn_editar.pack(side="right", padx=8)
+    btn_exportar = Boton(barra_acciones, "Exportar",
+                         lambda: exportar_productos(marco, seleccionados()),
+                         estilo="secundario")
+    btn_exportar.pack(side="right")
     lbl_seleccion = tk.Label(barra_acciones, text="", font=estilos.FUENTE_CARD_TXT,
                              bg=estilos.COLOR_FONDO, fg=estilos.COLOR_TEXTO)
     lbl_seleccion.pack(side="right", padx=8)
@@ -131,8 +167,8 @@ def crear_inventario(padre):
     tabla_frame.grid_columnconfigure(0, weight=1)
     tabla_frame.grid_rowconfigure(0, weight=1)
 
-    columnas = ("id", "nombre", "codigos", "categoria",
-                "precio_costo", "precio_venta", "stock", "stock_minimo")
+    columnas = ("id", "nombre", "codigos", "categoria", "precio_costo",
+                "precio_venta", "ganancia", "margen", "stock", "stock_minimo")
     # selectmode extended: Ctrl+clic y Shift+clic para elegir varios.
     # "tree" muestra la columna #0, que usamos para las casillas.
     tabla = ttk.Treeview(tabla_frame, columns=columnas, show="tree headings",
@@ -145,6 +181,7 @@ def crear_inventario(padre):
         "id": "ID", "nombre": "Nombre",
         "codigos": "Códigos de barras", "categoria": "Categoría",
         "precio_costo": "Precio Costo", "precio_venta": "Precio Venta",
+        "ganancia": "Ganancia", "margen": "Margen",
         "stock": "Stock", "stock_minimo": "Stock Mín."
     }
     for col in columnas:
@@ -153,14 +190,31 @@ def crear_inventario(padre):
     tabla.column("id", width=50)
     tabla.column("nombre", width=220, anchor="w")
     tabla.column("codigos", width=160, anchor="w")
+    tabla.column("categoria", width=160, anchor="w")
+    tabla.column("ganancia", width=90)
+    tabla.column("margen", width=70)
     tabla.tag_configure("par", background="#ffffff")
     tabla.tag_configure("impar", background="#f0f1f6")
 
     scroll = ttk.Scrollbar(tabla_frame, orient="vertical", command=tabla.yview)
     tabla.configure(yscrollcommand=scroll.set)
 
+    # barra horizontal: las columnas mantienen su ancho y se desplaza a los lados
+    for col in columnas:
+        tabla.column(col, stretch=False)
+    scroll_x = ttk.Scrollbar(tabla_frame, orient="horizontal", command=tabla.xview)
+    tabla.configure(xscrollcommand=scroll_x.set)
+
     tabla.grid(row=0, column=0, sticky="nsew")
     scroll.grid(row=0, column=1, sticky="ns")
+    scroll_x.grid(row=1, column=0, sticky="ew")
+    tabla.bind("<Shift-MouseWheel>",   # Shift + rueda = desplazar a los lados
+               lambda e: tabla.xview_scroll(-1 if e.delta > 0 else 1, "units"))
+    tk.Label(tabla_frame, text="Ganancia = lo que ganas por unidad  ·  "
+                               "Margen = de cada S/ 1.00 que cobras, cuánto es ganancia "
+                               "(ej. 28% = S/ 0.28)",
+             font=estilos.FUENTE_CARD_TXT, bg=estilos.COLOR_FONDO, fg="#8a8a9a",
+             anchor="w").grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
     # ── Panel de detalle (imagen del producto seleccionado) ──
     detalle = tk.Frame(marco, bg="white", width=260)
@@ -183,6 +237,7 @@ def crear_inventario(padre):
 
     productos = {}     # id -> fila de Supabase (para detalle y edición)
     cache_imgs = {}    # ruta en Storage -> PhotoImage (no descargar dos veces)
+    cats = {}          # id -> categoría
 
     def seleccionados():
         return [productos[int(tabla.item(i, "values")[0])] for i in tabla.selection()]
@@ -219,6 +274,8 @@ def crear_inventario(padre):
         btn_editar.activar(n == 1)
         btn_eliminar.activar(n > 0)
         btn_eliminar.configure(text=f"Eliminar ({n})" if n > 1 else "Eliminar")
+        btn_exportar.activar(n > 0)
+        btn_exportar.configure(text=f"Exportar ({n})" if n > 1 else "Exportar")
         lbl_seleccion.configure(text=f"{n} seleccionados" if n > 1 else "")
         if n == 1:
             mostrar_detalle(sel[0])
@@ -232,6 +289,8 @@ def crear_inventario(padre):
         codigos = codigos_de(p)
         lbl_info.configure(text=(
             f"ID: {p['id']}\n"
+            f"Categoría: {ruta_de(p.get('categoria_id'), cats) or '-'}\n\n"
+            + texto_margen(p.get("precio_costo"), p.get("precio_venta")) + "\n\n"
             "Códigos:\n  " + ("\n  ".join(codigos) if codigos else "-")))
 
         ruta = p.get("imagen")
@@ -286,7 +345,21 @@ def crear_inventario(padre):
             tabla.delete(fila)
         productos.clear()
         filtro = filtro.strip().lower()
+        cats.clear()
         try:
+            cats.update(cargar_categorias())
+        except Exception as e:
+            print("No se pudieron cargar las categorías:", e)
+        try:
+            rutas_filtro.clear()
+            rutas_filtro.update(rutas_ordenadas(cats))
+            filtro_categoria.configure(values=[TODAS] + list(rutas_filtro))
+            if filtro_categoria.get() not in rutas_filtro:
+                filtro_categoria.set(TODAS)   # p. ej. la categoría se eliminó
+            cat_elegida = rutas_filtro.get(filtro_categoria.get())
+            en_categoria = (con_descendientes(cat_elegida, cats)
+                            if cat_elegida is not None else None)
+
             resp = (supabase.table("productos")
                     .select("*, codigos_barras(codigo)")
                     .order("id").execute())
@@ -297,15 +370,20 @@ def crear_inventario(padre):
                                    or filtro in nombre.lower()
                                    or any(filtro in c.lower() for c in codigos)):
                     continue
+                if en_categoria is not None and p.get("categoria_id") not in en_categoria:
+                    continue
                 productos[p["id"]] = p
                 tag = "par" if len(tabla.get_children()) % 2 == 0 else "impar"
+                m = calcular_margen(p.get("precio_costo"), p.get("precio_venta"))
                 tabla.insert("", END, tags=(tag,), image=casillas["no"], values=(
                     p.get("id", ""),
                     nombre,
                     ", ".join(codigos) or "-",
-                    p.get("categoria_id", "") or "-",
-                    f"{float(p.get('precio_costo') or 0):.2f}",
-                    f"{float(p.get('precio_venta') or 0):.2f}",
+                    ruta_de(p.get("categoria_id"), cats) or "-",
+                    soles(p.get("precio_costo")),
+                    soles(p.get("precio_venta")),
+                    soles(m["ganancia"]),
+                    porcentaje(m["margen"]),
                     numero(p.get("stock")),
                     numero(p.get("stock_minimo")),
                 ))
@@ -318,6 +396,7 @@ def crear_inventario(padre):
 
     # buscar al escribir
     entrada_busqueda.bind("<KeyRelease>", lambda e: recargar_actual())
+    filtro_categoria.bind("<<ComboboxSelected>>", lambda e: recargar_actual())
 
     recargar_tabla()   # cargar al abrir
     return marco
@@ -334,7 +413,7 @@ def abrir_formulario(padre, al_guardar, producto=None):
     crear_barra_dialogo(ventana, titulo).pack(fill="x")
 
     # centrar sobre la ventana principal
-    ancho, alto = 720, 540
+    ancho, alto = 720, 690
     principal = padre.winfo_toplevel()
     x = principal.winfo_x() + (principal.winfo_width() - ancho) // 2
     y = principal.winfo_y() + (principal.winfo_height() - alto) // 2
@@ -406,9 +485,64 @@ def abrir_formulario(padre, al_guardar, producto=None):
                                            numero(p.get("precio_costo")))
     campos["precio_venta"] = agregar_campo("Precio de venta", 3, 1,
                                            numero(p.get("precio_venta")))
+    # rentabilidad: se recalcula mientras se escriben los precios
+    lbl_margen = tk.Label(cuerpo, text="", font=estilos.FUENTE_CARD_TXT, bg="white",
+                          fg=estilos.COLOR_TEXTO, anchor="w", justify="left",
+                          padx=10, pady=6, wraplength=440)
+    lbl_margen.grid(row=12, column=0, columnspan=2, sticky="ew", padx=(0, 10))
+
+    def mostrar_margen(_e=None):
+        try:
+            costo = float(campos["precio_costo"].get() or 0)
+            venta = float(campos["precio_venta"].get() or 0)
+        except ValueError:
+            lbl_margen.configure(text="Escribe precios válidos para ver la ganancia.",
+                                 fg="#8a8a9a")
+            return
+        lbl_margen.configure(text=texto_margen(costo, venta),
+                             fg=estilos.COLOR_PELIGRO if costo > venta
+                             else estilos.COLOR_TEXTO)
+
+    for campo in ("precio_costo", "precio_venta"):
+        campos[campo].bind("<KeyRelease>", mostrar_margen)
+    mostrar_margen()
+
     campos["stock"] = agregar_campo("Stock actual", 4, 0, numero(p.get("stock")))
     campos["stock_minimo"] = agregar_campo("Stock mínimo", 4, 1,
                                            numero(p.get("stock_minimo")))
+
+    # categoría: se elige (o se crea) en el árbol de categorías
+    categoria = {"id": p.get("categoria_id")}
+    tk.Label(cuerpo, text="Categoría", font=estilos.FUENTE_NORMAL,
+             bg=estilos.COLOR_FONDO, fg=estilos.COLOR_TEXTO,
+             anchor="w").grid(row=10, column=0, columnspan=2, sticky="w", padx=(0, 10))
+    fila_categoria = tk.Frame(cuerpo, bg=estilos.COLOR_FONDO)
+    fila_categoria.grid(row=11, column=0, columnspan=2, sticky="ew",
+                        padx=(0, 10), pady=(0, 10))
+    campo_categoria = ttk.Entry(fila_categoria)
+    campo_categoria.pack(side="left", fill="x", expand=True)
+
+    def mostrar_categoria():
+        try:
+            texto = ruta_de(categoria["id"], cargar_categorias())
+        except Exception as e:
+            print("No se pudieron cargar las categorías:", e)
+            texto = ""
+        campo_categoria.configure(state="normal")
+        campo_categoria.delete(0, "end")
+        campo_categoria.insert(0, texto or "Sin categoría")
+        campo_categoria.configure(state="readonly")
+
+    def elegir_categoria(_e=None):
+        def al_elegir(cat_id):
+            categoria["id"] = cat_id
+            mostrar_categoria()
+        abrir_gestor_categorias(ventana, mostrar_categoria, al_elegir, categoria["id"])
+
+    Boton(fila_categoria, "Elegir", elegir_categoria, estilo="secundario",
+          pady=4).pack(side="left", padx=(8, 0))
+    campo_categoria.bind("<Button-1>", elegir_categoria)
+    mostrar_categoria()
 
     # ── Imagen ──
     imagen_frame = tk.Frame(cuerpo, bg=estilos.COLOR_FONDO)
@@ -481,11 +615,18 @@ def abrir_formulario(padre, al_guardar, producto=None):
                 "precio_venta": float(campos["precio_venta"].get() or 0),
                 "stock": float(campos["stock"].get() or 0),
                 "stock_minimo": float(campos["stock_minimo"].get() or 0),
+                "categoria_id": categoria["id"],
             }
         except ValueError:
             messagebox.showwarning("Dato inválido",
                                    "Precios y stock deben ser números.",
                                    parent=ventana)
+            return
+        if datos["precio_costo"] > datos["precio_venta"]:
+            messagebox.showwarning("Precio inválido",
+                                   "El precio de costo no puede ser mayor que el "
+                                   "precio de venta.", parent=ventana)
+            campos["precio_venta"].focus_set()
             return
 
         codigos_antes = codigos_de(p)
